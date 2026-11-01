@@ -88,9 +88,9 @@
   },
   "onboarding": {
     "template_name": "任务管理多维表｜空白模板",
-    "template_url": null,
-    "template_verified_empty": false,
+    "template_url": "https://zk5ckzju3h.feishu.cn/base/H7u3bnCnYaOUh7sMJ8acMbhpn3f?from=from_copylink",
+    "template_verified_empty": true,
     "check_on_first_use": true,
-    "template_verified_at": null
+    "template_verified_at": "2026-10-14"
   }
 }

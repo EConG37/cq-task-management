@@ -13,7 +13,7 @@ https://github.com/EConG37/cq-task-management
 先阅读仓库 README.md 和 INSTALL.md，检查源码后再执行安装。
 默认安装到当前用户的全局 ~/.agents/skills/cq-task-management；已有同名 Skill 时保留其个人状态，按更新说明处理。
 安装完成后读取 SKILL.md 和 references/onboarding.md，在当前对话中开始引导。
-按“准备我自己的飞书多维表 → 配置飞书 CLI → 连接 Todoist”的顺序，一次只让我完成当前一步。
+按“复制配套飞书模板到我自己的空间 → 配置飞书 CLI → 连接 Todoist”的顺序，一次只让我完成当前一步。
 复用已有工具和登录；授权在官方页面完成，不向我索取密码或 API 密钥。
 配置后先和我确定计划，再根据我的授权发布任务。
 ```
@@ -39,7 +39,7 @@ python install.py
 
 ## 配置与开始使用
 
-1. 在自己的飞书空间中新建普通空白多维表，把完整链接交给 Agent。公开版不包含作者的工作表或固定模板链接。
+1. 打开 [任务管理多维表｜空白模板](https://zk5ckzju3h.feishu.cn/base/H7u3bnCnYaOUh7sMJ8acMbhpn3f?from=from_copylink)，复制到自己的飞书空间，把新副本的完整链接交给 Agent。已有自己的任务表也可复用。
 2. Agent 检查并配置飞书 CLI，验证你自己的账号、表格访问和字段结构；你在官方页面完成必要的授权。
 3. 复用或连接同一 Todoist 账号，优先使用现有插件/MCP，也可使用官方 CLI。
 
@@ -55,7 +55,7 @@ python install.py
 
 ```shell
 python -m unittest discover -s scripts -p "test_*.py"
-python scripts/package_release.py --source . --output dist/cq-task-management-v2.0.1.zip
+python scripts/package_release.py --source . --output dist/cq-task-management-v2.0.2.zip
 ```
 
 打包使用明确文件清单，排除个人 state、profiles、outbox 和缓存，并核验 ZIP 内容。不要直接压缩正在使用的整个 Skill 文件夹。

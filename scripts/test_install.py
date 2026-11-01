@@ -22,7 +22,8 @@ class InstallTests(unittest.TestCase):
             self.assertFalse((target / 'state').exists())
             config = json.loads((target / 'assets/config.example.json').read_text(encoding='utf-8'))
             self.assertFalse(config['configured'])
-            self.assertIsNone(config['onboarding']['template_url'])
+            self.assertTrue(config['onboarding']['template_url'].startswith('https://'))
+            self.assertTrue(config['onboarding']['template_verified_empty'])
 
     def test_existing_state_is_preserved_when_install_is_repeated(self):
         with tempfile.TemporaryDirectory() as temp:

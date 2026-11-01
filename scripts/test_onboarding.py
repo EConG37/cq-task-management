@@ -37,11 +37,11 @@ def evidence(config, transport='mcp'):
 
 
 class OnboardingTests(unittest.TestCase):
-    def test_fresh_install_only_prompts_for_own_blank_base(self):
+    def test_fresh_install_only_prompts_for_template_copy(self):
         config = json.loads((ROOT / 'assets/config.example.json').read_text(encoding='utf-8'))
         result = check_setup(config, {})
         self.assertEqual(result['guide']['step'], 1)
-        self.assertEqual(result['next_steps'], ['create_own_blank_base_and_send_url'])
+        self.assertEqual(result['next_steps'], ['copy_template_and_send_own_base_url'])
 
     def test_user_supplied_verified_template_can_be_copied(self):
         config = json.loads((ROOT / 'assets/config.example.json').read_text(encoding='utf-8'))
@@ -157,7 +157,7 @@ class OnboardingTests(unittest.TestCase):
         config = json.loads((ROOT / 'assets/config.example.json').read_text(encoding='utf-8'))
         self.assertIsNone(config['feishu']['base_token'])
         result = check_setup(config, {})
-        self.assertIn('create_own_blank_base_and_send_url', result['next_steps'])
+        self.assertIn('copy_template_and_send_own_base_url', result['next_steps'])
         self.assertFalse(result['can_publish'])
 
     def test_new_state_is_clean_and_has_fresh_scope(self):
@@ -177,7 +177,6 @@ class OnboardingTests(unittest.TestCase):
 
     def test_shared_template_cannot_be_used_as_users_work_base(self):
         config = configured()
-        config['onboarding']['template_url'] = 'https://example.feishu.cn/base/test-public-template'
         from urllib.parse import urlparse
         config['feishu']['base_token'] = urlparse(config['onboarding']['template_url']).path.split('/')[2]
         result = check_setup(config, evidence(config))
