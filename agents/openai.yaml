@@ -1,0 +1,3 @@
+interface:
+  display_name: "CQ-Task Management"
+  short_description: "通过飞书多维表与 Todoist 安排月周计划、发布每日任务并复盘进展"

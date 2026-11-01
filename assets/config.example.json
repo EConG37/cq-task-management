@@ -1,0 +1,96 @@
+{
+  "schema_version": "2.0",
+  "configured": false,
+  "scope": null,
+  "timezone": "Asia/Singapore",
+  "layers": {
+    "okr": false,
+    "base": true,
+    "calendar": false,
+    "todoist": true
+  },
+  "feishu": {
+    "base_token": null,
+    "tables": {
+      "main_tasks": null,
+      "actions": null
+    },
+    "fields": {
+      "main_tasks": {
+        "title": null,
+        "status": null,
+        "completed_at": null,
+        "acceptance": null
+      },
+      "actions": {
+        "title": null,
+        "status": null,
+        "publish": null,
+        "todoist_id": null,
+        "planned_for": null,
+        "priority": null,
+        "completed_at": null,
+        "main_task_id": null
+      }
+    },
+    "status_values": {
+      "pending": "待开始",
+      "active": "主线",
+      "blocked": "阻塞",
+      "done": "完成",
+      "cancelled": "取消"
+    },
+    "priority_values": {
+      "p1": "P0",
+      "p2": "P1",
+      "p3": "P2",
+      "p4": "P3"
+    },
+    "main_status_values": {
+      "pending": "待开始",
+      "active": "持续跟进",
+      "blocked": "阻塞",
+      "done": "已完成",
+      "cancelled": "取消"
+    }
+  },
+  "todoist": {
+    "user_id": null,
+    "inbox_id": null,
+    "transport": "auto"
+  },
+  "capabilities": {
+    "base_read": false,
+    "base_write": false,
+    "okr_read": false,
+    "okr_write": false,
+    "todoist_read": false,
+    "todoist_write": false,
+    "calendar_read": false,
+    "calendar_write": false
+  },
+  "sync": {
+    "mode": "on_demand",
+    "approved": false,
+    "approved_fields": [],
+    "runner": null,
+    "automation_ids": []
+  },
+  "review": {
+    "trigger": "on_demand",
+    "owner_only": true,
+    "storage": {
+      "mode": "append_to_text",
+      "field_name": "任务详情",
+      "field_id": null,
+      "verified": false
+    }
+  },
+  "onboarding": {
+    "template_name": "任务管理多维表｜空白模板",
+    "template_url": null,
+    "template_verified_empty": false,
+    "check_on_first_use": true,
+    "template_verified_at": null
+  }
+}

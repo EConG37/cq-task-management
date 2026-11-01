@@ -1,0 +1,25 @@
+# User-owned state and credentials must never enter the repository.
+state/
+profiles/
+outbox/
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*credentials*.json
+*token*.json
+.mcp.json
+mcp.json
+config.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.task-*/
+.cq-task-install-*/
+dist/
+*.zip
+*.log
+.DS_Store
+Thumbs.db
