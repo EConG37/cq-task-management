@@ -82,14 +82,15 @@ npx @larksuite/cli@latest install
 
 ### 3.2 给 Agent 接入同一账号
 
-按宿主能力选择一条接入路线，不把所有方案同时丢给用户：
+默认且唯一推荐通道 = 官方 `td` CLI，与飞书侧 lark-cli 对称，不依赖宿主插件：
 
-1. 已有可用插件/MCP：只验证，不重复安装。未连接且当前宿主支持插件目录时搜索 Todoist，给出该宿主真实连接操作，等待用户完成 OAuth。
-2. 支持远程 MCP：按 [Todoist 官方 MCP 说明](https://github.com/Doist/todoist-mcp)，使用 `https://ai.todoist.net/mcp` 和 Streamable HTTP/OAuth。设置位置依当前宿主确定；不明时只询问用户使用哪个 Agent 客户端。官方远程 MCP 通常没有要用户寻找的“安装文件”。
-3. 宿主确实使用 MCP 配置文件：才请用户提供去除 API token、client secret、Authorization 头的官方配置片段或文件。保留其他服务配置，仅增加 Todoist，不执行上传配置中的任意命令。
-4. 没有 MCP 或宿主不支持：按 [todoist-access.md](todoist-access.md) 用官方 td CLI。告知“可以通过另一种官方连接方式操作同一个 Todoist 账号”，在已有配置授权范围内安装/登录；不要求用户自己写接口。用户继续在 Todoist 软件里操作。
+1. 检查 `command -v td`；未装时 `npm install -g @doist/todoist-cli`（官方包，Doist 维护；Node/npm 缺失先补运行环境）。
+2. `td auth login` 发起浏览器 OAuth（`--no-browser-open` 可打印链接交还用户），凭据自动进系统凭据管理器并续期；不要求用户提供密码或粘贴 API token，不用 `--read-only`。
+3. `td auth status --json` 核对身份。安装、登录、核验与常用命令详见 [todoist-access.md](todoist-access.md)。
 
-OAuth 完成后，只读验证身份、项目、任务、评论、已完成/撤销查询，检查创建、更新、完成能力及真实写入授权。完整空列表是有效读取，失败不是空列表。缺哪项只修复当前问题，不回飞书重新复制。既不能连接 MCP 也不能运行 CLI/网络时，保留聊天规划，说明自动同步未配置完成。
+宿主已有 Todoist MCP 连接时可临时复用做只读验证，但不再新建或配置 MCP，也不把它作为主通道（该通道断线需重启会话，已于 2026-10-18 停用摘除）。
+
+验证身份、项目、任务、评论、已完成/撤销查询，检查创建、更新、完成能力及真实写入授权。完整空列表是有效读取，失败不是空列表。缺哪项只修复当前问题，不回飞书重新复制。CLI 不可用且无网络时，保留聊天规划，说明自动同步未配置完成。
 
 与本地绑定 user_id 不同：暂停原状态的一切线上写入，进入新用户隔离配置，不把旧任务迁到新账号。身份确认后保存账号 ID、transport=mcp/cli、项目路由和能力摘要；凭据留在 OAuth/系统凭据管理器，不写入 skill JSON。
 

@@ -1,50 +1,58 @@
-# Todoist 接入：MCP/插件与无 MCP 的 CLI
+# Todoist 接入：官方 td CLI（默认通道）
 
-接入入口与安装方式核验日期：2026-11-01；具体子命令仍须查本机 help。优先使用当前已连接、可用的工具；改 transport 不改变 Todoist 账号、Base scope 或任务 ID。先验证同一 user_id，否则进入新账号配置，不能把已有任务映射迁到另一账号。
+核验日期：2026-10-18（td v5.5.2 实测：安装、OAuth 登录、读、写、完成全部通过）。**本 skill 的默认且推荐通道 = Todoist 官方 `@doist/todoist-cli`（td）**，与飞书侧 `lark-cli` 对称：本地 CLI 直连官方账号，不依赖宿主插件。
 
-## MCP
+官方依据：npm 包 `@doist/todoist-cli`（仓库 github.com/Doist/todoist-cli，维护者均为 @doist.com，MIT 开源）。宿主的 Todoist MCP（ai.todoist.net/mcp）已于 2026-10-18 停用并摘除：该通道断线后工具全部不可用且需重启会话，用户不接受这种故障模式。
 
-Todoist 官方远程地址为 `https://ai.todoist.net/mcp`，使用 Streamable HTTP + OAuth。通常只配置地址并登录，不必下载安装包。官方仓库也提供本地 npm 运行方式；默认不采用需要用户粘贴 API key 的本地方案。
-
-Todoist 工具名称/参数以当前 MCP schema 为准，兼容本 skill 已有 user-info、find-tasks、fetch-object、find-comments、find-activity、add-tasks、update-tasks 和 complete-tasks 等语义。首次只读检查账号与数据；不因为工具可见就认为已授权。
-
-## 无 MCP：官方 td CLI
-
-这是可直接被 skill 调用的替代通道，无需实现另一套任务系统。当前环境已经可用 MCP 时，不额外安装 CLI。
-
-用户选择/授权 CLI 配置后，检查 Node/npm 和官方 CLI 当前要求，优先复用已安装 td。需要安装时使用官方包：
+## 安装与登录
 
 ```powershell
 npm install -g @doist/todoist-cli
-td auth login
-td auth status --json
-td accounts current --json
+td auth login            # 浏览器 OAuth，只需一次
+td auth status --json    # 核对账号
 ```
 
-OAuth 打开浏览器，凭据默认存入 Windows Credential Manager/macOS Keychain/Linux Secret Service。不可默认降级为明文保存，也不调用 td auth token view 把 token 打印出来。只读登录可用 td auth login --read-only，但此模式无法发布/改期。
+- 凭据存系统凭据管理器（Windows Credential Manager / macOS Keychain / Linux Secret Store），自动续期。不要 `--read-only`（只读无法发布/改期）。
+- 浏览器不便时用 `td auth login --no-browser-open` 打印授权链接，把链接交还用户。
+- `td auth status --json` 的 id/fullName 必须与 config.todoist.user_id 一致；不一致立即停写，按 onboarding 换账号流程处理（暂停线上写入、新建隔离档案）。
+- 本机多个账号时加 `--user <id|email>`；`td accounts list` 查看。升级用 `td update`（`td doctor` 会提示）。
+- 没有 Node/npm 时先补运行环境，再继续本步。
+- 不让用户粘贴个人 API token（`td auth token`/环境变量方式不作默认），也不调用 `td auth token view` 打印 token。
+- Todoist 自带的 agent skill（`td skill install`）不需要安装——本 skill 已覆盖工作流。
 
-安装此 CQ-Task Management 本身不需要再安装 Todoist 附带 skill。若用户另需官方 skill，遵守其全局目录偏好；本环境使用 `td skill install universal` 对应 ~/.agents/skills，先核对当前 CLI 帮助，不能按 Codex 专用选项写到其他目录。
+## 常用命令（v5.5.2 实测）
 
-每次先查具体子命令 --help，优先 --json 完整读取，使用 id:<稳定ID> 避免模糊标题匹配。调用用 argv 数组/subprocess，不拼接用户标题/评论进 shell；描述和反馈含长文本时选支持的 stdin/file 输入。支持 --dry-run 才使用，不假定所有命令支持相同分页 flag。
-
-| 工作 | CLI 命令族 |
+| 工作 | 命令 |
 |---|---|
-| 账号/项目 | td auth status、td accounts current、td project list/view |
-| 查任务/单个任务 | td task list、td task view id:<taskId> |
-| 已完成/撤销事件 | td completed list、td activity |
-| 读任务评论 | td comment list id:<taskId> |
-| 创建子任务 | td task add，显式 --project id:<projectId>、--parent id:<parentId>、--due YYYY-MM-DD、--priority p1..p4、--description |
-| 更新原任务 | td task update id:<taskId> --due YYYY-MM-DD；只传实际变化字段 |
-| 完成/撤销 | td task complete id:<taskId>、td task uncomplete id:<taskId> |
+| 今日+逾期 | `td today --json` |
+| 近一周 | `td upcoming --json`（默认 7 天） |
+| 收件箱 | `td inbox --json` |
+| 查任务 | `td task list [--project id:X] [--parent id:X] [--due today/overdue/YYYY-MM-DD] [--filter 原生查询] --all --json`；单条 `td task view id:X --json` |
+| 完成历史 | `td completed list --since YYYY-MM-DD --until YYYY-MM-DD`（可 `--search`） |
+| 活动/评论 | `td activity`、`td comment list id:X` |
+| 建子任务 | `td task add "标题" --project id:P --parent id:Q --due YYYY-MM-DD --priority p1..p4 --description "..." --json`；纯容器父任务加 `--uncompletable` |
+| 改原任务 | `td task update id:X --due YYYY-MM-DD [--priority p1..p4] [--content ...] [--description ...]`；清日期用 `--no-due`；只传变化字段 |
+| 改期（保循环） | `td task reschedule id:X <date>` |
+| 移动 | `td task move id:X --project/--section/--parent ...` |
+| 完成/撤销 | `td task complete id:X` / `td task uncomplete id:X` |
 
-表中只表示已核验的命令族与核心选项，flags 以本机 help 为准。读取任务/评论/完成记录都完整翻页；--all、--cursor、--limit 的支持随命令族而异。Task JSON 的 completed_at/is_completed/checked、due、parent_id 等字段可能与 MCP 的 camelCase 不同，依据本机真实输出归一化到 script-contract.md；日期以用户时区转换，不改变真实完成时间。
+纪律：
 
-CLI 的正常写入 scope 只表明技术可用，本次发布/改期仍需用户授权。写后读回、标记去重、outbox 恢复、基线及评论指纹规则与 MCP 完全相同；失败时不切另一通道重复创建。
+- 引用一律 `id:<稳定ID>`，不用标题匹配；读一律 `--json`（大结果 `--ndjson`），翻页用 `--cursor`/`--all`。
+- 写命令可先 `--dry-run` 预览；`--quiet` 压掉成功提示（create 仍会打印 ID）。
+- 写后读回、来源标记去重、outbox 恢复、基线与评论指纹规则不变；td 失败时不切换其他通道重复创建。
+- `--due` 原文交给服务端 due_string 解析，只喂 `YYYY-MM-DD`（服务端不解复杂语句如 "starting ..."）。
+- 调用用 argv 数组/subprocess，不把用户标题/评论拼接进 shell；长描述用 `--stdin`。
 
-## 官方来源
+## 字段形状（归一化注意）
 
-- [Todoist 开发者平台](https://developer.todoist.com/)：远程 MCP、统一 API、CLI。
-- [官方 MCP 仓库](https://github.com/Doist/todoist-mcp)：不同宿主接入说明。
-- [官方 CLI 仓库](https://github.com/Doist/todoist-cli)：安装、OAuth、凭据保存及支持命令。
+td 的 JSON 与旧宿主 MCP 不同，归一化以本机真实输出为准（另见 script-contract.md）：
 
-官方 API 也支持任务和评论；仅当 CLI/MCP 不满足需求且用户明确需要自定义适配时，使用官方当前 API v1 或 SDK。普通用户优先 OAuth + CLI，避免要求粘贴个人 API token。
+- `priority` 是数字 1-4，与归一化 p1..p4 反向对应：p1(最高)=4，p2=3，p3=2，p4=1。
+- 日期是对象：`due.date`（YYYY-MM-DD）、`due.string`、`due.isRecurring`；没有 dueDate 字符串字段。
+- 列表/详情 JSON 不含 checked；完成事实读 `td completed list` / `td activity`，不臆造完成时间。
+- 常用字段：id、content、description、projectId、parentId、sectionId、labels、url、isUncompletable、deadline、duration。
+
+## 应急兜底
+
+td 不可用时先修 CLI 本身：`td doctor` 自检、重装官方包、重新 `td auth login`；仍不可用时按 onboarding 第 3 步重来。不自建第二套同步通道，不临时借用宿主凭据直连接口，也不静默降级为手工改 Todoist。长期修不好就保留聊天规划，并说明自动同步未配置完成。

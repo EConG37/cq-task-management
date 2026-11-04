@@ -46,7 +46,7 @@ python scripts/init_state.py --state-dir state --timezone <用户的IANA时区>
 
 1. **复制飞书模板**：展示 [任务管理多维表｜空白模板](https://zk5ckzju3h.feishu.cn/base/H7u3bnCnYaOUh7sMJ8acMbhpn3f?from=from_copylink)，引导复制到用户自己的空间，再发送新副本的完整链接；用户已有工作表也可复用。模板原链接不能直接绑定为工作库。
 2. **飞书 CLI**：检查工具、应用配置和当前用户登录。缺失时按[官方安装说明](https://github.com/larksuite/cli/blob/main/README.zh.md)执行必要配置。读取自己的 Base，按 `references/structure.md` 检查并补建主任务、子任务及字段，保存现场 ID。使用当前官方 `lark-shared`、`lark-base` 说明；依赖 Skill 缺失时从官方 CLI 获取并按全局目录偏好安装，不猜参数。
-3. **Todoist**：先复用可用插件/MCP。需要新接入时根据宿主支持选择[官方 MCP](https://github.com/Doist/todoist-mcp)或[官方 CLI](https://github.com/Doist/todoist-cli)，按 `references/todoist-access.md` 操作同一个账号。
+3. **Todoist**：复用已有账号，Agent 统一通过[官方 CLI](https://github.com/Doist/todoist-cli)的 `td` 接入，按 `references/todoist-access.md` 操作同一个账号。
 
 用户已明确要求安装并配置时，在该范围内继续必要步骤；遇到需要用户复制链接或 OAuth 登录的页面时，给出当前操作并等待实际反馈。授权链接使用工具本次返回的原始地址；不得收取密码、API token、appSecret 或完整凭据文件。复用已有登录，不为配置额外创建测试任务。
 
