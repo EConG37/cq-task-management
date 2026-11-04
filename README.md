@@ -41,7 +41,7 @@ python install.py
 
 1. 打开 [任务管理多维表｜空白模板](https://zk5ckzju3h.feishu.cn/base/H7u3bnCnYaOUh7sMJ8acMbhpn3f?from=from_copylink)，复制到自己的飞书空间，把新副本的完整链接交给 Agent。已有自己的任务表也可复用。
 2. Agent 检查并配置飞书 CLI，验证你自己的账号、表格访问和字段结构；你在官方页面完成必要的授权。
-3. 复用或连接同一 Todoist 账号，Agent 统一通过官方 `td` CLI 接入。
+3. 连接同一 Todoist 账号：默认走官方 `td` CLI（`npm install -g @doist/todoist-cli`，浏览器 OAuth 登录）；已有连接只验证，不重复安装。
 
 首次配置后可以说：“帮我安排本周计划”“把确认的任务发布到 Todoist”“读取今天的完成情况和评论，做一次复盘”。
 
@@ -55,7 +55,7 @@ python install.py
 
 ```shell
 python -m unittest discover -s scripts -p "test_*.py"
-python scripts/package_release.py --source . --output dist/cq-task-management-v2.0.2.zip
+python scripts/package_release.py --source . --output dist/cq-task-management-v2.0.3.zip
 ```
 
 打包使用明确文件清单，排除个人 state、profiles、outbox 和缓存，并核验 ZIP 内容。不要直接压缩正在使用的整个 Skill 文件夹。
