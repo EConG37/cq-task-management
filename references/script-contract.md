@@ -36,7 +36,9 @@ coverage=true 仅在相关查询完整翻页、绑定 ID 单独查过、活动/�
 
 - publish：只创建 authorized_action_ids 中、未发布且无绑定/来源标记候选、日期落在 1~7 天窗口内的任务；标记或绑定找回的任务输出 recovered_mappings，不重建。恢复后改用 pull 回写 publish/ID 并核验。已完成/取消/超硬期限的新任务不发布。
 - pull：只为授权子任务生成 Base 回写。缺失基线且执行值不同报 initial_execution_mismatch；用户已决定接管值后可在 accepted_initial_action_ids 明确列出对应 ID。一致初始读回无需重新确认，可通过无操作计划 commit 保存基线。
-- reschedule：facts_synced=true 且刚读回执行事实/评价后，approved_changes={actionId:{planned_for,priority,title}} 中列出此次明确获授权的改动。仍使用 authorized_action_ids；不重建任务，不暗中改变容器。跨周改已有任务可超过窗口，但不能越过硬期限。
+- reschedule：facts_synced=true 且刚读回执行事实和评价后，approved_changes={actionId:{planned_for,priority,title,current_plan,legacy_plan}} 只填获授权的字段。仍使用 authorized_action_ids，复用原 ID；日期不能越过硬期限。有当前计划区时，改日期或标题必须同时提供核对后的 current_plan。传入 current_plan 时需要 feedback_field_verified=true 和完整 details 文本，空字符串清除当前计划区。legacy_plan 是待移除的旧版详情前缀原文，只用于未分区的详情迁移；精确匹配失败进入核对。
+- withdraw：authorized_action_ids 只列明确需要撤出排期的旧项。要求 facts_synced=true、完整已核对的绑定，以及待更新时的 feedback_field_verified=true 和完整 details（空字段归一为 ""）。Todoist 的 deadline_date 必须从现场读取为 YYYY-MM-DD 或 null，缺字段不能视为空。按计划对原 Todoist 任务清除日期与截止日期，再读回并更新原 Base 记录的状态、日期及当前计划。approved_changes 可为旧项提供精确 legacy_plan。读回确认撤出后保存旧绑定，重试按最新快照只补未完成步骤。
+- 替代项：publish 或后续恢复的 pull 提供 replacement_sources={新Base记录ID:[旧Base记录ID,...]}，只按用户已确认的替换关系填写并随 outbox 保留。旧项须有真实 Base 与 Todoist 快照、Base 已取消、计划日期为空、Todoist 已清日期及截止日期、飞书当前计划区已撤下。使用计划中的 withdrawn_sources 再次核对两边旧项；同父任务有同名开放任务时停止创建，只有确认是不同工作的具体新 ID 才能列进 distinct_new_action_ids。该例外不跳过替换前置检查。
 
 操作前重新读两个平台目标，比较 precondition.base_hash/target_hash；有 depends_on 的 Base 更新只在 Todoist 更新读回后执行，todoist_hash 在无依赖时与原快照比对，有依赖时与已核验更新后的预期快照比对。期间发生无关变化则重新读取/生成方案，在原授权仍适用时继续，不把并发变化覆盖掉。
 

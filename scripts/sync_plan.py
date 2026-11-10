@@ -11,6 +11,8 @@ from pathlib import Path
 PRIORITIES = {"p1", "p2", "p3", "p4"}
 BASE_STATUSES = {"pending", "active", "blocked", "done", "cancelled"}
 TODO_STATUSES = {"open", "done", "deleted"}
+PLAN_START = "[cq-current-plan]"
+PLAN_END = "[/cq-current-plan]"
 
 
 def fingerprint(value):
@@ -67,6 +69,8 @@ def validate_record(record, base):
     if base:
         if record.get("hard_deadline") is not None:
             day(record["hard_deadline"])
+    elif record.get("deadline_date") is not None:
+        day(record["deadline_date"])
     if record["status"] == "done" and not record["completed_at"]:
         raise ValueError("done requires actual completion timestamp")
 
@@ -124,6 +128,49 @@ def execution_matches(action, task):
             and (action["status"] == "done") == (task["status"] == "done"))
 
 
+def replace_current_plan(details, current_plan, legacy_plan=None):
+    if not isinstance(details, str) or not isinstance(current_plan, str):
+        raise ValueError("current plan requires read-back text")
+    if any(marker in current_plan for marker in (PLAN_START, PLAN_END)):
+        raise ValueError("reserved current-plan marker")
+    lines = details.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == PLAN_START]
+    ends = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == PLAN_END]
+    block = PLAN_START + "\n" + current_plan.strip() + "\n" + PLAN_END if current_plan.strip() else ""
+    if starts or ends:
+        if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+            raise ValueError("ambiguous current-plan block")
+        before = "".join(lines[:starts[0]])
+        inside = "".join(lines[starts[0] + 1:ends[0]])
+        if "[personal-task-flow-review:" in inside:
+            raise ValueError("current-plan block overlaps comment history")
+        after = "".join(lines[ends[0] + 1:])
+        return before + (block + "\n" if block and after else block) + after
+    if legacy_plan is not None:
+        if (not isinstance(legacy_plan, str) or not legacy_plan.strip()
+                or "[personal-task-flow-review:" in legacy_plan):
+            raise ValueError("legacy plan must be the approved leading text")
+        if details == legacy_plan:
+            details = ""
+        elif details.startswith(legacy_plan + "\n") or details.startswith(legacy_plan + "\r\n"):
+            details = details[len(legacy_plan):]
+        else:
+            raise ValueError("legacy plan no longer matches")
+    return block + ("\n" if block and details else "") + details
+
+
+def task_is_withdrawn(action, task, route):
+    return (action["status"] == "cancelled" and action["planned_for"] is None
+            and action["publish"] and action.get("todoist_id") == task["id"]
+            and task["status"] == "open" and not task["recurring"]
+            and task["planned_for"] is None and "deadline_date" in task and task["deadline_date"] is None
+            and isinstance(action.get("details"), str)
+            and not {PLAN_START, PLAN_END}.intersection(action["details"].splitlines())
+            and execution_matches(action, task) and action["title"] == task["title"]
+            and route is not None and task.get("project_id") == route["project_id"]
+            and task.get("parent_id") == route["todoist_id"])
+
+
 def validate_bindings(routes, mappings):
     if not isinstance(routes, dict) or not isinstance(mappings, dict):
         raise ValueError("main_task_bindings and action_mappings must be objects")
@@ -150,8 +197,8 @@ def plan_sync(snapshot):
     if not isinstance(scope, str) or not scope.strip():
         raise ValueError("a stable nonempty scope is required")
     direction = snapshot.get("direction")
-    if direction not in {"publish", "pull", "reschedule"}:
-        raise ValueError("direction must be publish, pull or reschedule")
+    if direction not in {"publish", "pull", "reschedule", "withdraw"}:
+        raise ValueError("direction must be publish, pull, reschedule or withdraw")
     authorized = snapshot.get("authorized_action_ids", [])
     if not isinstance(authorized, list) or any(not isinstance(a, str) or not a for a in authorized):
         raise ValueError("authorized_action_ids must contain explicitly authorized action IDs")
@@ -163,6 +210,15 @@ def plan_sync(snapshot):
     changes = snapshot.get("approved_changes", {})
     if not isinstance(changes, dict):
         raise ValueError("approved_changes must be an object")
+    replacements = snapshot.get("replacement_sources", {})
+    if not isinstance(replacements, dict) or any(
+        not isinstance(ids, list) or not ids or any(not isinstance(i, str) or not i or i == new for i in ids)
+        for new, ids in replacements.items()
+    ):
+        raise ValueError("replacement_sources must map each new action to its old action IDs")
+    distinct = snapshot.get("distinct_new_action_ids", [])
+    if not isinstance(distinct, list) or any(not isinstance(i, str) or not i for i in distinct):
+        raise ValueError("distinct_new_action_ids must contain explicitly approved IDs")
     if direction == "publish":
         window = snapshot.get("window", {})
         start, end = day(window.get("start")), day(window.get("end"))
@@ -195,7 +251,7 @@ def plan_sync(snapshot):
         if baseline["base"]["id"] != action_id:
             raise ValueError("baseline action ID mismatch")
 
-    operations, conflicts, recovered = [], [], {}
+    operations, conflicts, recovered, withdrawal_evidence = [], [], {}, {}
 
     def conflict(action_id, reason, **detail):
         conflicts.append({"action_id": action_id, "reason": reason, **detail})
@@ -215,12 +271,23 @@ def plan_sync(snapshot):
         reverse[task_id].append(action_id)
     invalid_bindings = {a for owners in reverse.values() if len(owners) > 1 for a in owners}
     marker_owners = defaultdict(list)
+    marker_candidates = defaultdict(list)
     for action_id in actions:
         marker = source_marker(scope, action_id)
         for task in tasks.values():
             if marker in (line.strip() for line in task["description"].splitlines()):
                 marker_owners[task["id"]].append(action_id)
+                marker_candidates[action_id].append(task)
     ambiguous_markers = {a for owners in marker_owners.values() if len(owners) > 1 for a in owners}
+    withdrawn = {
+        action_id for action_id, task_id in bound_ids.items()
+        if action_id in actions and task_id in tasks and action_id not in invalid_bindings
+        and action_id not in ambiguous_markers
+        and [t["id"] for t in marker_candidates[action_id]] in ([], [task_id])
+        and not any(c["action_id"] == action_id for c in conflicts)
+        and task_is_withdrawn(actions[action_id], tasks[task_id], routes.get(actions[action_id].get("main_task_id")))
+    }
+    withdrawn_task_ids = {bound_ids[action_id] for action_id in withdrawn}
 
     for action_id, action in sorted(actions.items()):
         if action_id not in authorized:
@@ -234,7 +301,7 @@ def plan_sync(snapshot):
             conflict(action_id, "task_has_multiple_source_markers")
             continue
         marker = source_marker(scope, action_id)
-        candidates = [t for t in tasks.values() if marker in (line.strip() for line in t["description"].splitlines())]
+        candidates = marker_candidates[action_id]
         if len(candidates) > 1:
             conflict(action_id, "duplicate_source_marker", task_ids=[t["id"] for t in candidates])
             continue
@@ -263,6 +330,16 @@ def plan_sync(snapshot):
         if task_id in {r["todoist_id"] for r in routes.values()}:
             conflict(action_id, "action_bound_to_main_task")
             continue
+        if direction in {"publish", "pull"} and action_id in replacements:
+            waiting = set(replacements.get(action_id, [])) - withdrawn
+            if waiting:
+                conflict(action_id, "replacement_requires_withdrawal", old_action_ids=sorted(waiting))
+                continue
+            withdrawal_evidence[action_id] = {
+                old_id: {"base_hash": fingerprint(actions[old_id]),
+                         "todoist_id": bound_ids[old_id], "todoist_hash": fingerprint(tasks[bound_ids[old_id]])}
+                for old_id in replacements[action_id]
+            }
         if task is None:
             if direction != "publish" or action["status"] == "cancelled":
                 conflict(action_id, "unbound_action" if direction != "publish" else "cancelled_action_cannot_be_published")
@@ -282,6 +359,15 @@ def plan_sync(snapshot):
             if action.get("hard_deadline") and day(action["planned_for"]) > day(action["hard_deadline"]):
                 conflict(action_id, "hard_deadline_exceeded")
                 continue
+            same_title = [
+                t["id"] for t in tasks.values()
+                if t["status"] == "open" and t["id"] not in withdrawn_task_ids
+                and t.get("project_id") == route["project_id"] and t.get("parent_id") == route["todoist_id"]
+                and " ".join(t["title"].split()).casefold() == " ".join(action["title"].split()).casefold()
+            ]
+            if same_title and action_id not in distinct:
+                conflict(action_id, "possible_duplicate_open_task", task_ids=sorted(same_title))
+                continue
             notes = [str(action.get("deliverable") or "").strip()]
             if action.get("hard_deadline"):
                 notes.append("Hard deadline: " + action["hard_deadline"])
@@ -293,12 +379,15 @@ def plan_sync(snapshot):
             }
             if action.get("hard_deadline"):
                 fields["deadline_date"] = action["hard_deadline"]
-            operations.append(operation("todoist.create", action, fields, marker=marker))
+            create = operation("todoist.create", action, fields, marker=marker)
+            if action_id in withdrawal_evidence:
+                create["precondition"]["withdrawn_sources"] = withdrawal_evidence[action_id]
+            operations.append(create)
             continue
         if task["status"] == "deleted":
             conflict(action_id, "todoist_deleted_requires_decision")
             continue
-        if action["status"] == "cancelled":
+        if action["status"] == "cancelled" and direction != "withdraw":
             conflict(action_id, "withdrawal_requires_decision")
             continue
         if task["recurring"]:
@@ -313,11 +402,37 @@ def plan_sync(snapshot):
             # A retry must reuse an existing task, even if the Base write failed.
             continue
 
+        if direction == "withdraw":
+            if snapshot.get("facts_synced") is not True:
+                conflict(action_id, "facts_and_reviews_must_be_synced_first")
+                continue
+            if (task["status"] != "open" or action["status"] == "done" or task["completed_at"]
+                    or action["completed_at"] or task["title"] != action["title"]
+                    or task["priority"] != action["priority"]):
+                conflict(action_id, "withdrawal_requires_matching_open_task")
+                continue
+            if "deadline_date" not in task:
+                conflict(action_id, "withdrawal_requires_deadline_readback")
+                continue
+            if not action["publish"] or action.get("todoist_id") != task_id:
+                conflict(action_id, "withdrawal_requires_verified_binding")
+                continue
+            wanted = changes.get(action_id, {})
+            if not isinstance(wanted, dict) or set(wanted) - {"legacy_plan"}:
+                raise ValueError("withdraw accepts only the approved legacy plan text")
+            if action_id in withdrawn and not wanted:
+                continue
+            task_fields = {k: None for k in ("planned_for", "deadline_date") if task[k] is not None}
+            base_fields = {k: v for k, v in {"status": "cancelled", "planned_for": None}.items() if action[k] != v}
+            current_plan = ""
+        else:
+            current_plan = None
+
         baseline = baselines.get(action_id)
         if baseline and baseline["todoist"]["id"] != task_id:
             conflict(action_id, "baseline_task_id_mismatch")
             continue
-        if not baseline and action_id not in initial and not execution_matches(action, task):
+        if direction != "withdraw" and not baseline and action_id not in initial and not execution_matches(action, task):
             conflict(action_id, "initial_execution_mismatch")
             continue
 
@@ -329,7 +444,9 @@ def plan_sync(snapshot):
                 conflict(action_id, "completed_task_cannot_be_rescheduled")
                 continue
             wanted = changes.get(action_id)
-            if not isinstance(wanted, dict) or not wanted or set(wanted) - {"planned_for", "priority", "title"}:
+            if (not isinstance(wanted, dict) or not wanted
+                    or set(wanted) - {"planned_for", "priority", "title", "current_plan", "legacy_plan"}
+                    or ("legacy_plan" in wanted and "current_plan" not in wanted)):
                 conflict(action_id, "explicit_schedule_changes_required")
                 continue
             if "planned_for" in wanted:
@@ -341,8 +458,31 @@ def plan_sync(snapshot):
                 raise ValueError("schedule priority must be p1..p4")
             if "title" in wanted and (not isinstance(wanted["title"], str) or not wanted["title"].strip()):
                 raise ValueError("schedule title must be nonempty")
-            task_fields = {k: v for k, v in wanted.items() if task.get(k) != v}
-            base_fields = {k: v for k, v in wanted.items() if action.get(k) != v}
+            if "current_plan" in wanted and not isinstance(wanted["current_plan"], str):
+                raise ValueError("current_plan must be a string")
+            current_plan = wanted.get("current_plan")
+            execution = {k: wanted[k] for k in ("planned_for", "priority", "title") if k in wanted}
+            if (current_plan is None and PLAN_START in (action.get("details") or "").splitlines()
+                    and any(k in execution and execution[k] != action[k] for k in ("planned_for", "title"))):
+                conflict(action_id, "current_plan_review_required")
+                continue
+            task_fields = {k: v for k, v in execution.items() if task.get(k) != v}
+            base_fields = {k: v for k, v in execution.items() if action.get(k) != v}
+        if direction in {"reschedule", "withdraw"}:
+            if current_plan is not None:
+                if snapshot.get("feedback_field_verified") is not True:
+                    conflict(action_id, "verified_details_field_required")
+                    continue
+                wanted = changes.get(action_id, {})
+                if not isinstance(wanted, dict):
+                    raise ValueError("approved action changes must be an object")
+                try:
+                    details = replace_current_plan(action.get("details"), current_plan, wanted.get("legacy_plan"))
+                except ValueError:
+                    conflict(action_id, "current_plan_text_requires_review")
+                    continue
+                if details != action["details"]:
+                    base_fields["details"] = details
             update = None
             if task_fields:
                 update = operation("todoist.update", action, task_fields, task_id, task)
@@ -385,12 +525,14 @@ def plan_sync(snapshot):
             write["precondition"]["todoist_hash"] = fingerprint(task)
             operations.append(write)
 
+    eligible = authorized - {c["action_id"] for c in conflicts}
     return {
         "schema_version": "2.0", "scope": scope, "direction": direction, "operations": operations,
         "conflicts": conflicts, "recovered_mappings": {k: v for k, v in recovered.items() if not any(c['action_id'] == k for c in conflicts)},
         "progress": progress(list(actions.values())),
         "state_hashes": snapshot.get("state_hashes", {}),
-        "action_ids": sorted(authorized - {c['action_id'] for c in conflicts}),
+        "action_ids": sorted(eligible),
+        "withdrawn_sources": {k: v for k, v in withdrawal_evidence.items() if k in eligible},
     }
 
 

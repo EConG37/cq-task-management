@@ -8,7 +8,7 @@ from unittest.mock import patch
 import commit_state
 from commit_state import STATE_FILES, commit
 from review_plan import comment_fingerprint, comment_key, plan_reviews
-from sync_plan import fingerprint, plan_sync, source_marker, verify_receipts
+from sync_plan import PLAN_END, PLAN_START, fingerprint, plan_sync, source_marker, verify_receipts
 from validate_config import validate
 
 SCOPE = 'test-scope'
@@ -187,6 +187,60 @@ class PublishAndPullTests(unittest.TestCase):
     def test_reschedule_waits_for_fact_review_sync(self):
         value = snapshot('reschedule'); value['approved_changes'] = {'action': {'planned_for': '2026-10-16'}}
         self.assertEqual(self.reason(value), 'facts_and_reviews_must_be_synced_first')
+
+    def test_new_record_id_does_not_bypass_open_task_duplicate_check(self):
+        value = snapshot('publish')
+        value['base_actions'].append(base(id='new', publish=False, todoist_id=None))
+        value['authorized_action_ids'] = ['new']
+        self.assertEqual(self.reason(value), 'possible_duplicate_open_task')
+        value['distinct_new_action_ids'] = ['new']
+        self.assertEqual([op['kind'] for op in plan_sync(value)['operations']], ['todoist.create'])
+
+    def test_replacement_waits_for_withdrawal_and_withdrawal_retries_in_place(self):
+        history = '[personal-task-flow-review:example]\n原评论与进展'
+        value = snapshot('withdraw', action=base(details=PLAN_START + '\n旧执行安排\n' + PLAN_END + '\n' + history),
+                         todo=task(deadline_date='2026-10-18'))
+        value.update(facts_synced=True, feedback_field_verified=True)
+        withdraw = plan_sync(value)
+        first, second = withdraw['operations']
+        self.assertEqual(first['target_id'], 'task')
+        self.assertEqual(first['fields'], {'planned_for': None, 'deadline_date': None})
+        self.assertEqual(second['fields'], {'status': 'cancelled', 'planned_for': None, 'details': history})
+        self.assertEqual(second['depends_on'], [first['op_id']])
+
+        value['todoist_tasks'][0].update(first['fields'])
+        self.assertEqual([op['kind'] for op in plan_sync(value)['operations']], ['base.update'])
+        publication = copy.deepcopy(value)
+        publication.update(direction='publish', authorized_action_ids=['new'], replacement_sources={'new': ['action']})
+        publication['base_actions'].append(base(id='new', title='重拆后的工作', publish=False, todoist_id=None))
+        self.assertEqual(self.reason(publication), 'replacement_requires_withdrawal')
+        value['base_actions'][0].update(second['fields'])
+        self.assertEqual(plan_sync(value)['operations'], [])
+        publication['base_actions'][0].update(second['fields'])
+        create = plan_sync(publication)['operations'][0]
+        self.assertEqual(create['kind'], 'todoist.create')
+        self.assertEqual(create['precondition']['withdrawn_sources']['action']['todoist_id'], 'task')
+        publication['todoist_tasks'].append(task(
+            id='new-task', title='重拆后的工作', description=create['fields']['description']))
+        self.assertEqual(plan_sync(publication)['operations'], [])
+        publication['todoist_tasks'][0]['deadline_date'] = '2026-10-18'
+        self.assertEqual(self.reason(publication), 'replacement_requires_withdrawal')
+
+    def test_reschedule_replaces_approved_plan_and_preserves_feedback(self):
+        history = '\n\n[personal-task-flow-review:example]\n原评论与进展'
+        value = snapshot('reschedule', action=base(details='旧排期说明' + history))
+        value.update(facts_synced=True, feedback_field_verified=True, approved_changes={
+            'action': {'planned_for': '2026-10-16', 'current_plan': '改过的安排', 'legacy_plan': '旧排期说明'},
+        })
+        update = plan_sync(value)['operations'][-1]
+        details = update['fields']['details']
+        self.assertIn('改过的安排', details)
+        self.assertNotIn('旧排期说明', details)
+        self.assertTrue(details.endswith(history))
+        value['base_actions'][0]['details'] = details
+        self.assertNotIn('details', plan_sync(value)['operations'][-1]['fields'])
+        value['approved_changes']['action'] = {'planned_for': '2026-10-17'}
+        self.assertEqual(self.reason(value), 'current_plan_review_required')
 
 
 class FeedbackTests(unittest.TestCase):

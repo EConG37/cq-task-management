@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from sync_plan import execution_matches, fingerprint, indexed, load_json, validate_bindings, verify_receipts
+from sync_plan import execution_matches, fingerprint, indexed, load_json, task_is_withdrawn, validate_bindings, verify_receipts
 from review_plan import comment_fingerprint, comment_key
 
 STATE_FILES = ('mappings.json', 'baselines.json', 'reviews.json')
@@ -78,8 +78,13 @@ def commit(plan, receipts, snapshot, state_dir):
                 if op['kind'] == 'todoist.create':
                     target_id = result['mapping_updates'].get(op['action_id'])
                 observed = (actions if op['kind'] == 'base.update' else tasks).get(target_id)
-                if observed is None or any(observed.get(k) != v for k, v in op['fields'].items()):
+                if observed is None or any(k not in observed or observed[k] != v for k, v in op['fields'].items()):
                     raise ValueError('final readback changed after receipt: ' + op['op_id'])
+            for sources in plan.get('withdrawn_sources', {}).values():
+                for old_id, source in sources.items():
+                    if (fingerprint(actions.get(old_id)) != source['base_hash']
+                            or fingerprint(tasks.get(source['todoist_id'])) != source['todoist_hash']):
+                        raise ValueError('withdrawn source changed before replacement commit: ' + old_id)
             touched = set(plan.get('action_ids', []))
             touched.update(op['action_id'] for op in plan.get('operations', []))
             touched.update(plan.get('recovered_mappings', {}))
@@ -97,6 +102,8 @@ def commit(plan, receipts, snapshot, state_dir):
                         or action['title'] != task['title'] or not execution_matches(action, task)
                         or task.get('project_id') != route['project_id'] or task.get('parent_id') != route['todoist_id']):
                     raise ValueError('final dual snapshot is not consistent: ' + action_id)
+                if plan.get('direction') == 'withdraw' and not task_is_withdrawn(action, task, route):
+                    raise ValueError('withdrawal is not verified on both sides: ' + action_id)
                 mappings[action_id] = task_id
                 baselines[action_id] = {'base': action, 'todoist': task}
             validate_bindings(binding['main_tasks'], mappings)

@@ -55,7 +55,7 @@ python install.py
 
 ```shell
 python -m unittest discover -s scripts -p "test_*.py"
-python scripts/package_release.py --source . --output dist/cq-task-management-v2.0.3.zip
+python scripts/package_release.py --source . --output dist/cq-task-management-v2.0.4.zip
 ```
 
 打包使用明确文件清单，排除个人 state、profiles、outbox 和缓存，并核验 ZIP 内容。不要直接压缩正在使用的整个 Skill 文件夹。
