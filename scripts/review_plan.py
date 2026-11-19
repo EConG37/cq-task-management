@@ -5,7 +5,7 @@ import json
 import sys
 from collections import defaultdict
 from datetime import datetime
-from sync_plan import day, fingerprint, indexed, load_json, operation, validate_bindings
+from sync_plan import day, existing_execution_route, fingerprint, indexed, load_json, operation, validate_bindings
 
 
 def comment_fingerprint(scope, comment):
@@ -89,6 +89,11 @@ def plan_reviews(snapshot):
                 or action['status'] == 'cancelled'):
             conflicts.append({'action_id': action_id, 'reason': 'feedback_task_not_safely_open_or_done'})
             continue
+        route = existing_execution_route(action, task, snapshot.get('main_task_bindings', {}))
+        if (not action['publish'] or action.get('todoist_id') != task_id or route is None
+                or (task.get('project_id'), task.get('parent_id')) != (route['project_id'], route['todoist_id'])):
+            conflicts.append({'action_id': action_id, 'reason': 'feedback_binding_requires_verification'})
+            continue
         if (action['status'] == 'done') != (task['status'] == 'done'):
             conflicts.append({'action_id': action_id, 'reason': 'pull_completion_facts_first'})
             continue
@@ -139,7 +144,7 @@ def plan_reviews(snapshot):
                 notices.append({'action_id': action_id, 'comment_key': latest_key,
                                 'reason': 'comment_disagrees_with_completion'})
             suggested_date = meaning.get('proposed_date')
-            if suggested_date is not None:
+            if suggested_date is not None and task['status'] == 'open':
                 day(suggested_date)
                 adjustments.append({'action_id': action_id, 'planned_for': suggested_date,
                                     'source_comment_key': latest_key, 'requires_authorization': True})

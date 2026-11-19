@@ -10,12 +10,37 @@ CAPABILITIES = {"base_read", "base_write", "okr_read", "okr_write", "todoist_rea
 LAYERS = {"base", "okr", "todoist", "calendar"}
 BASE_FIELDS = {"title", "main_task_id", "status", "completed_at"}
 ACTION_FIELDS = BASE_FIELDS | {"publish", "todoist_id", "planned_for", "priority"}
-SYNC_FIELDS = {"title", "todoist_id", "planned_for", "priority", "status", "completed_at"}
+SYNC_FIELDS = {"title", "todoist_id", "planned_for", "priority", "status", "completed_at", "details"}
+LEGACY_SYNC_LABELS = {"title": "任务", "todoist_id": "Todoist ID", "planned_for": "计划执行日期",
+                      "priority": "优先级", "status": "状态", "completed_at": "实际完成时间"}
 SECRET_KEYS = {"token", "accesstoken", "refreshtoken", "apikey", "apitoken", "password", "appsecret", "oauthtoken", "todoistapikey"}
 
 
 def nonempty(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+def normalized_sync_fields(config):
+    def object_value(parent, key):
+        value = parent.get(key)
+        return value if isinstance(value, dict) else {}
+
+    sync = object_value(config, "sync")
+    raw_fields = sync.get("approved_fields")
+    if not isinstance(raw_fields, list) or any(not nonempty(item) for item in raw_fields):
+        raise ValueError("sync.approved_fields must be a list of field names")
+    feishu = object_value(config, "feishu")
+    action_fields = object_value(object_value(feishu, "fields"), "actions")
+    storage = object_value(object_value(config, "review"), "storage")
+    aliases = {key: (key, action_fields.get(key), LEGACY_SYNC_LABELS.get(key)) for key in SYNC_FIELDS}
+    aliases["details"] = ("details", storage.get("field_id"), storage.get("field_name"))
+    result = set()
+    for item in raw_fields:
+        matches = {key for key, names in aliases.items() if item in names}
+        if len(matches) != 1:
+            raise ValueError("sync.approved_fields contains unsupported or ambiguous fields")
+        result.update(matches)
+    return sorted(result)
 
 
 def validate(config):
@@ -71,13 +96,16 @@ def validate(config):
     for key in required_caps:
         if not isinstance(caps.get(key), bool):
             errors.append("capabilities." + key + " must be boolean")
-    if sync.get("mode") not in {"on_demand", "scheduled"}:
+    mode = sync.get("mode")
+    if mode not in ("on_demand", "scheduled", "daily"):
         errors.append("sync.mode must be on_demand or scheduled")
     if not isinstance(sync.get("approved"), bool):
         errors.append("sync.approved must be boolean")
-    fields = sync.get("approved_fields")
-    if not isinstance(fields, list) or any(not isinstance(f, str) or f not in SYNC_FIELDS for f in fields):
-        errors.append("sync.approved_fields contains unsupported fields")
+    try:
+        fields = normalized_sync_fields(config)
+    except ValueError as exc:
+        fields = []
+        errors.append(str(exc))
     if not isinstance(sync.get("automation_ids"), list) or any(not nonempty(i) for i in sync.get("automation_ids", [])):
         errors.append("sync.automation_ids must be a list of real nonempty IDs")
     if config.get("configured") is True:
@@ -155,7 +183,7 @@ def validate(config):
         for key in ("base_write", "todoist_write"):
             if caps.get(key) is not True:
                 errors.append("approved two-way sync requires " + key)
-    if sync.get("mode") == "scheduled":
+    if mode in ("scheduled", "daily"):
         if sync.get("approved") is not True or not nonempty(sync.get("runner")) or not sync.get("automation_ids"):
             errors.append("scheduled sync requires approval, a runner and automation IDs")
     return errors
@@ -172,6 +200,8 @@ def main(argv=None):
         config = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
         errors = validate(config)
         result = {"ok": not errors, "configured": config.get("configured") if isinstance(config, dict) else None, "errors": errors}
+        if not errors:
+            result["approved_fields"] = normalized_sync_fields(config) if config["sync"]["approved"] else []
     except (OSError, ValueError, TypeError) as exc:
         result = {"ok": False, "errors": [str(exc)]}
     print(json.dumps(result, ensure_ascii=False, indent=2))

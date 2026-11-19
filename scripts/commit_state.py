@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from sync_plan import execution_matches, fingerprint, indexed, load_json, task_is_withdrawn, validate_bindings, verify_receipts
+from sync_plan import existing_execution_route, execution_matches, fingerprint, indexed, load_json, task_is_withdrawn, validate_bindings, verify_receipts
 from review_plan import comment_fingerprint, comment_key
 
 STATE_FILES = ('mappings.json', 'baselines.json', 'reviews.json')
@@ -97,6 +97,8 @@ def commit(plan, receipts, snapshot, state_dir):
                 task_id = mappings.get(action_id) or action.get('todoist_id')
                 task = tasks.get(task_id)
                 route = binding['main_tasks'].get(action.get('main_task_id'))
+                if plan.get('direction') in ('pull', 'review'):
+                    route = existing_execution_route(action, task, binding['main_tasks'])
                 if (task is None or task['status'] == 'deleted' or task['recurring'] or route is None
                         or not action['publish'] or action.get('todoist_id') != task_id
                         or action['title'] != task['title'] or not execution_matches(action, task)

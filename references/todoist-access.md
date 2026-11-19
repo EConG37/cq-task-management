@@ -2,7 +2,7 @@
 
 核验日期：2026-10-18（td v5.5.2 实测：安装、OAuth 登录、读、写、完成全部通过）。**本 skill 的默认且推荐通道 = Todoist 官方 `@doist/todoist-cli`（td）**，与飞书侧 `lark-cli` 对称：本地 CLI 直连官方账号，不依赖宿主插件。
 
-官方依据：npm 包 `@doist/todoist-cli`（仓库 github.com/Doist/todoist-cli，维护者均为 @doist.com，MIT 开源）。宿主的 Todoist MCP（ai.todoist.net/mcp）已于 2026-10-18 停用并摘除：该通道断线后工具全部不可用且需重启会话，用户不接受这种故障模式。
+官方 CLI 与使用说明见 [Doist/todoist-cli](https://github.com/Doist/todoist-cli)。
 
 ## 安装与登录
 
@@ -27,9 +27,10 @@ td auth status --json    # 核对账号
 | 今日+逾期 | `td today --json` |
 | 近一周 | `td upcoming --json`（默认 7 天） |
 | 收件箱 | `td inbox --json` |
-| 查任务 | `td task list [--project id:X] [--parent id:X] [--due today/overdue/YYYY-MM-DD] [--filter 原生查询] --all --json`；单条 `td task view id:X --json` |
-| 完成历史 | `td completed list --since YYYY-MM-DD --until YYYY-MM-DD`（可 `--search`） |
-| 活动/评论 | `td activity`、`td comment list id:X` |
+| 查任务 | `td task list [--project id:X] [--parent id:X] [--due today/overdue/YYYY-MM-DD] [--filter 原生查询] --all --json --full`；单条 `td task view id:X --json --full` |
+| 完成历史 | `td completed list --since YYYY-MM-DD --until YYYY-MM-DD --all --json --full`，跨度超过 3 个月分段 |
+| 评论 | `td comment list id:X --all --json --full` |
+| 补查状态事件 | `td activity --type task --event completed --since YYYY-MM-DD --until YYYY-MM-DD --json --full`；撤销用 `--event uncompleted`，按游标翻页 |
 | 建子任务 | `td task add "标题" --project id:P --parent id:Q --due YYYY-MM-DD --priority p1..p4 --description "..." --json`；纯容器父任务加 `--uncompletable` |
 | 改原任务 | `td task update id:X --due YYYY-MM-DD [--priority p1..p4] [--content ...] [--description ...]`；清日期用 `--no-due`；只传变化字段 |
 | 改期（保循环） | `td task reschedule id:X <date>` |
@@ -50,9 +51,10 @@ td 的 JSON 与旧宿主 MCP 不同，归一化以本机真实输出为准（另
 
 - `priority` 是数字 1-4，与归一化 p1..p4 反向对应：p1(最高)=4，p2=3，p3=2，p4=1。
 - 日期是对象：`due.date`（YYYY-MM-DD）、`due.string`、`due.isRecurring`；没有 dueDate 字符串字段。
-- 列表/详情 JSON 不含 checked；完成事实读 `td completed list` / `td activity`，不臆造完成时间。
+- v5.5.2 在 `--full` 下可返回 `checked`、`completedAt`，精简输出可能省略。单条查看能返回已完成任务，按明确字段取状态。当前状态与完成历史不同时重新读详情；活动 403 时用完整完成历史或详情核验。缺少真实时间时用 null，不能填同步时刻。
+- 列表 JSON 可为 `{results, nextCursor}`；使用 `--all` 后检查剩余游标。评论全量字段使用 `content`、`postedAt`、`postedUid`、`id`、`taskId`，过滤已删除评论。已完成任务也按原 ID 查评论。
 - 常用字段：id、content、description、projectId、parentId、sectionId、labels、url、isUncompletable、deadline、duration。
 
-## 应急兜底
+## 读取失败
 
-td 不可用时先修 CLI 本身：`td doctor` 自检、重装官方包、重新 `td auth login`；仍不可用时按 onboarding 第 3 步重来。不自建第二套同步通道，不临时借用宿主凭据直连接口，也不静默降级为手工改 Todoist。长期修不好就保留聊天规划，并说明自动同步未配置完成。
+td 鉴权或读取失败时，按 onboarding 的 Todoist 步骤恢复账号或权限。保留待同步项及失败原因。

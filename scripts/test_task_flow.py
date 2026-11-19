@@ -8,8 +8,8 @@ from unittest.mock import patch
 import commit_state
 from commit_state import STATE_FILES, commit
 from review_plan import comment_fingerprint, comment_key, plan_reviews
-from sync_plan import PLAN_END, PLAN_START, fingerprint, plan_sync, source_marker, verify_receipts
-from validate_config import validate
+from sync_plan import PLAN_END, PLAN_START, audit_bindings, fingerprint, plan_sync, source_marker, verify_receipts
+from validate_config import normalized_sync_fields, validate
 
 SCOPE = 'test-scope'
 ROUTES = {'main': {'todoist_id': 'parent', 'project_id': 'project'}}
@@ -168,6 +168,38 @@ class PublishAndPullTests(unittest.TestCase):
         fields = plan_sync(value)['operations'][0]['fields']
         self.assertEqual(fields, {'completed_at': None, 'status': 'active'})
 
+    def test_bound_completion_without_baseline_uses_observed_status_and_time(self):
+        completed = '2026-10-15T20:40:00+08:00'
+        value = snapshot(todo=task(status='done', completed_at=completed))
+        value['baselines'] = {}
+        value['action_mappings'] = {}
+        self.assertEqual(plan_sync(value)['operations'][0]['fields'],
+                         {'status': 'done', 'completed_at': completed})
+
+    def test_completed_time_is_never_replaced_by_sync_time(self):
+        value = snapshot(todo=task(status='done'))
+        self.assertEqual(plan_sync(value)['operations'][0]['fields'], {'status': 'done'})
+        value['base_actions'][0].update(status='done', completed_at='2026-10-15T20:40:00+08:00')
+        self.assertEqual(plan_sync(value)['operations'], [])
+
+    def test_read_only_audit_finds_unbound_open_and_completed_project_tasks(self):
+        value = snapshot()
+        value['todoist_tasks'].extend([
+            task(id='missed-open', description=''), task(id='missed-done', description='', status='done'),
+            task(id='temporary', description='', parent_id=None),
+        ])
+        report = audit_bindings(value)
+        self.assertNotIn('operations', report)
+        self.assertEqual([(i['todoist_id'], i['reason'], i['same_title_action_ids']) for i in report['issues']],
+                         [('missed-done', 'todoist_task_without_base_binding', ['action']),
+                          ('missed-open', 'todoist_task_without_base_binding', ['action'])])
+
+    def test_read_only_audit_distinguishes_missing_base_link_from_missing_record(self):
+        value = snapshot(action=base(main_task_id=None), todo=task(status='done'))
+        issue, = audit_bindings(value)['issues']
+        self.assertEqual((issue['reason'], issue['main_task_id'], issue['evidence_action_ids']),
+                         ('base_main_task_link_unresolved', 'main', ['action']))
+
     def test_incomplete_reads_stop_planning(self):
         value = snapshot(); value['coverage']['todoist'] = False
         with self.assertRaises(ValueError): plan_sync(value)
@@ -273,6 +305,7 @@ class FeedbackTests(unittest.TestCase):
         plan = plan_reviews(value)
         self.assertNotIn('status', plan['operations'][0]['fields'])
         self.assertEqual(plan['notices'][0]['reason'], 'comment_disagrees_with_completion')
+        self.assertEqual(plan['proposed_adjustments'], [])
 
     def test_other_author_does_not_write(self):
         value = review_snapshot(); value['comments'][0]['author_id'] = 'collaborator'
@@ -346,6 +379,39 @@ class StateCommitTests(unittest.TestCase):
         bindings = json.loads((self.root / 'mappings.json').read_text(encoding='utf-8'))['scopes'][SCOPE]
         self.assertEqual(bindings['actions']['action'], 'task')
         self.assertIn(comment()['text'], final['base_actions'][0]['details'])
+
+    def test_next_day_review_uses_completion_before_processing_comment(self):
+        value = review_snapshot()
+        value['baselines'] = {}
+        completed = '2026-10-15T20:40:00+08:00'
+        value['todoist_tasks'][0].update(status='done', completed_at=completed)
+        self.assertEqual(plan_reviews(value)['conflicts'][0]['reason'], 'pull_completion_facts_first')
+        pull = plan_sync(self.prepare(value))
+        verified = apply_external_readbacks(pull, value)
+        self.assertTrue(commit(pull, receipts(pull), verified, self.root)['ok'])
+
+        review = plan_reviews(self.prepare(verified))
+        self.assertFalse(review['proposed_adjustments'])
+        reviewed = apply_external_readbacks(review, verified)
+        self.assertTrue(commit(review, receipts(review), reviewed, self.root)['ok'])
+        self.assertEqual(reviewed['base_actions'][0]['completed_at'], completed)
+        self.assertIn(comment()['text'], reviewed['base_actions'][0]['details'])
+        reviewed['processed_comments'] = json.loads(
+            (self.root / 'reviews.json').read_text(encoding='utf-8'))['scopes'][SCOPE]
+        self.assertEqual(plan_reviews(reviewed)['operations'], [])
+
+    def test_empty_base_project_link_does_not_block_verified_completion(self):
+        value = snapshot(action=base(main_task_id=None, main_task_link_count=0),
+                         todo=task(status='done', completed_at='2026-10-15T20:40:00+08:00'))
+        value.update(action_mappings={}, baselines={})
+        plan = plan_sync(self.prepare(value))
+        self.assertEqual(set(plan['operations'][0]['fields']), {'status', 'completed_at'})
+        post = apply_external_readbacks(plan, value)
+        self.assertTrue(commit(plan, receipts(plan), post, self.root)['ok'])
+        self.assertIsNone(post['base_actions'][0]['main_task_id'])
+        for count in (None, 2):
+            value['base_actions'][0]['main_task_link_count'] = count
+            self.assertEqual(plan_sync(value)['conflicts'][0]['reason'], 'main_task_binding_required')
 
     def test_bad_receipt_does_not_consume_comments(self):
         value = self.prepare(review_snapshot()); plan = plan_reviews(value)
@@ -435,6 +501,16 @@ class StateCommitTests(unittest.TestCase):
         self.assertEqual(validate(config), [])
         self.assertEqual(config['feishu']['main_status_values']['done'], '已完成')
         self.assertEqual(config['feishu']['status_values']['done'], '完成')
+
+    def test_existing_daily_config_keeps_exact_approved_field_scope(self):
+        path = Path(__file__).resolve().parents[1] / 'assets' / 'config.example.json'
+        config = json.loads(path.read_text(encoding='utf-8-sig'))
+        config['sync'].update(mode='daily', approved_fields=['状态', '实际完成时间', '计划执行日期', '优先级'])
+        self.assertEqual(normalized_sync_fields(config), ['completed_at', 'planned_for', 'priority', 'status'])
+        self.assertFalse(any('sync.mode' in error or 'approved_fields' in error for error in validate(config)))
+        self.assertTrue(any('scheduled sync requires approval' in error for error in validate(config)))
+        config['sync']['approved_fields'].append(config['review']['storage']['field_name'])
+        self.assertIn('details', normalized_sync_fields(config))
 
 
 if __name__ == '__main__':

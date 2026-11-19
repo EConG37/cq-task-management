@@ -71,8 +71,6 @@ def validate_record(record, base):
             day(record["hard_deadline"])
     elif record.get("deadline_date") is not None:
         day(record["deadline_date"])
-    if record["status"] == "done" and not record["completed_at"]:
-        raise ValueError("done requires actual completion timestamp")
 
 
 def indexed(records, base):
@@ -124,8 +122,10 @@ def day(value):
 
 
 def execution_matches(action, task):
-    return (all(action[k] == task[k] for k in ("planned_for", "priority", "completed_at"))
-            and (action["status"] == "done") == (task["status"] == "done"))
+    done = task["status"] == "done"
+    return (all(action[k] == task[k] for k in ("planned_for", "priority"))
+            and (action["status"] == "done") == done
+            and (action["completed_at"] == task["completed_at"] or (done and task["completed_at"] is None)))
 
 
 def replace_current_plan(details, current_plan, legacy_plan=None):
@@ -171,6 +171,16 @@ def task_is_withdrawn(action, task, route):
             and task.get("parent_id") == route["todoist_id"])
 
 
+def existing_execution_route(action, task, routes):
+    """Identify an already-published task even when the Base project link is empty."""
+    route = routes.get(action.get("main_task_id"))
+    if (route is None and action.get("main_task_id") is None and action.get("main_task_link_count") == 0
+            and task and action["publish"] and action.get("todoist_id") == task["id"]):
+        return next((r for r in routes.values() if r["todoist_id"] == task.get("parent_id")
+                     and r["project_id"] == task.get("project_id")), None)
+    return route
+
+
 def validate_bindings(routes, mappings):
     if not isinstance(routes, dict) or not isinstance(mappings, dict):
         raise ValueError("main_task_bindings and action_mappings must be objects")
@@ -188,6 +198,95 @@ def validate_bindings(routes, mappings):
         raise ValueError("a Todoist ID cannot bind multiple actions")
     if parents.intersection(mappings.values()) or routes.keys() & mappings.keys():
         raise ValueError("main task and action bindings must be separate")
+
+
+def audit_bindings(snapshot):
+    """Find project tasks missed by a review that starts from Base records."""
+    coverage = snapshot.get("coverage", {})
+    if any(coverage.get(key) is not True for key in ("base", "todoist")):
+        raise ValueError("binding audit requires complete Base and Todoist coverage for its stated scope")
+    scope = snapshot["scope"]
+    if not isinstance(scope, str) or not scope.strip():
+        raise ValueError("a stable nonempty scope is required")
+    routes = snapshot.get("main_task_bindings", {})
+    mappings = snapshot.get("action_mappings", {})
+    validate_bindings(routes, mappings)
+    base_owners = defaultdict(set)
+    local_owners = defaultdict(set)
+    marker_owners = {}
+    possible_matches = defaultdict(list)
+    actions = {}
+    for action in snapshot["base_actions"]:
+        action_id = action["id"]
+        if action_id in actions:
+            raise ValueError("duplicate Base record ID: " + action_id)
+        actions[action_id] = action
+        marker_owners[source_marker(scope, action_id)] = action_id
+        if action.get("todoist_id"):
+            base_owners[action["todoist_id"]].add(action_id)
+        key = (action.get("main_task_id"), " ".join(action["title"].split()).casefold())
+        possible_matches[key].append(action_id)
+    for action_id, task_id in mappings.items():
+        local_owners[task_id].add(action_id)
+    by_route = {(r["project_id"], r["todoist_id"]): action_id for action_id, r in routes.items()}
+    containers = {r["todoist_id"] for r in routes.values()}
+    tasks = indexed(snapshot["todoist_tasks"], False)
+    task_markers = {}
+    marked_tasks = defaultdict(set)
+    for task_id, task in tasks.items():
+        markers = {line.strip() for line in task["description"].splitlines()
+                   if line.strip().startswith("[goal-flow:")}
+        task_markers[task_id] = markers
+        if task["status"] != "deleted":
+            for marker in markers:
+                marked_tasks[marker].add(task_id)
+    issues = []
+    for task_id, task in sorted(tasks.items()):
+        if task_id in containers or task["status"] == "deleted":
+            continue
+        main_id = by_route.get((task.get("project_id"), task.get("parent_id")))
+        markers = task_markers[task_id]
+        from_marker = {marker_owners[marker] for marker in markers if marker in marker_owners}
+        from_base = base_owners[task_id]
+        from_local = local_owners[task_id]
+        if not (main_id or from_base or from_local or from_marker):
+            continue
+        owners = from_base | from_local | from_marker
+        reason = None
+        if len(owners) > 1 or len(markers) > 1:
+            reason = "conflicting_binding_evidence"
+        elif any(len(marked_tasks[marker]) > 1 for marker in markers):
+            reason = "duplicate_source_marker"
+        elif markers and not from_marker:
+            reason = "unknown_source_marker"
+        elif owners:
+            action_id = next(iter(owners))
+            action = actions.get(action_id)
+            if action is None:
+                reason = "mapped_base_record_missing"
+            elif ((action.get("todoist_id") not in (None, "", task_id))
+                  or mappings.get(action_id) not in (None, task_id)):
+                reason = "conflicting_binding_evidence"
+            elif main_id is not None and action.get("main_task_id") is None:
+                reason = "base_main_task_link_unresolved"
+            elif main_id is None or action.get("main_task_id") != main_id:
+                reason = "task_route_changed_requires_decision"
+            elif task["recurring"]:
+                reason = "recurring_binding_not_supported"
+            elif not from_base or action.get("publish") is not True:
+                reason = "existing_base_link_incomplete"
+            elif not from_local:
+                reason = "local_binding_missing"
+        elif task["recurring"]:
+            reason = "unbound_recurring_task"
+        else:
+            reason = "todoist_task_without_base_binding"
+        if reason:
+            key = (main_id, " ".join(task["title"].split()).casefold())
+            issues.append({"todoist_id": task_id, "status": task["status"], "reason": reason,
+                           "main_task_id": main_id, "evidence_action_ids": sorted(owners),
+                           "same_title_action_ids": possible_matches.get(key, [])})
+    return {"scope": scope, "issues": issues}
 
 
 def plan_sync(snapshot):
@@ -323,7 +422,8 @@ def plan_sync(snapshot):
         else:
             task = None
 
-        route = routes.get(action.get("main_task_id"))
+        route = (existing_execution_route(action, task, routes) if direction == "pull"
+                 else routes.get(action.get("main_task_id")))
         if route is None:
             conflict(action_id, "main_task_binding_required")
             continue
@@ -432,7 +532,13 @@ def plan_sync(snapshot):
         if baseline and baseline["todoist"]["id"] != task_id:
             conflict(action_id, "baseline_task_id_mismatch")
             continue
-        if direction != "withdraw" and not baseline and action_id not in initial and not execution_matches(action, task):
+        # An existing stable ID is enough to apply a verified completion or
+        # reopening when the other execution values already agree.
+        existing_link = mappings.get(action_id) == task_id or action.get("todoist_id") == task_id
+        intact_schedule = all(action[k] == task[k] for k in ("planned_for", "priority"))
+        completion_only = direction == "pull" and existing_link and intact_schedule
+        if (direction != "withdraw" and not baseline and action_id not in initial
+                and not completion_only and not execution_matches(action, task)):
             conflict(action_id, "initial_execution_mismatch")
             continue
 
@@ -497,7 +603,9 @@ def plan_sync(snapshot):
 
         patches = {"planned_for": task["planned_for"], "priority": task["priority"]}
         if task["status"] == "done":
-            patches.update(status="done", completed_at=task["completed_at"])
+            patches["status"] = "done"
+            if task["completed_at"] is not None or action["status"] != "done":
+                patches["completed_at"] = task["completed_at"]
         else:
             patches["completed_at"] = None
             if action["status"] == "done":
@@ -506,7 +614,7 @@ def plan_sync(snapshot):
             old = baseline["base"]
             changed = []
             for key in ("planned_for", "priority", "completed_at"):
-                if action[key] != old[key] and action[key] != patches[key]:
+                if key in patches and action[key] != old[key] and action[key] != patches[key]:
                     changed.append(key)
             if (action["status"] == "done") != (old["status"] == "done"):
                 if (action["status"] == "done") != (task["status"] == "done"):
@@ -598,7 +706,7 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
-    for mode in ("plan", "progress"):
+    for mode in ("plan", "progress", "audit"):
         cmd = sub.add_parser(mode)
         cmd.add_argument("--input", required=True)
         cmd.add_argument("--output")
@@ -611,6 +719,8 @@ def main(argv=None):
             result = verify_receipts(load_json(args.plan), load_json(args.receipts))
         elif args.mode == "progress":
             result = {"progress": progress(load_json(args.input)["base_actions"])}
+        elif args.mode == "audit":
+            result = audit_bindings(load_json(args.input))
         else:
             result = plan_sync(load_json(args.input))
         rendered = json.dumps(result, ensure_ascii=False, indent=2)
